@@ -2,6 +2,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
+const ecpay = require('../services/ecpayService');
 
 const router = express.Router();
 
@@ -303,7 +304,7 @@ router.get('/:id', (req, res) => {
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
 
   res.json({
-    data: { ...order, items },
+    data: { ...order, items, payment_provider: ecpay.isEnabled() ? 'ecpay' : 'mock' },
     error: null,
     message: '成功'
   });
@@ -373,12 +374,22 @@ router.get('/:id', (req, res) => {
  *                   type: string
  *       400:
  *         description: action 無效或訂單狀態不是 pending
+ *       403:
+ *         description: 已啟用綠界金流，模擬付款停用
  *       404:
  *         description: 訂單不存在
  */
 router.patch('/:id/pay', (req, res) => {
   const { action } = req.body;
   const userId = req.user.userId;
+
+  if (ecpay.isEnabled()) {
+    return res.status(403).json({
+      data: null,
+      error: 'FORBIDDEN',
+      message: '已啟用綠界金流，無法使用模擬付款'
+    });
+  }
 
   const actionMap = { success: 'paid', fail: 'failed' };
   if (!action || !actionMap[action]) {
@@ -412,6 +423,203 @@ router.patch('/:id/pay', (req, res) => {
     data: { ...updated, items },
     error: null,
     message: action === 'success' ? '付款成功' : '付款失敗'
+  });
+});
+
+const QUERY_COOLDOWN_MS = 5000;
+const lastQueryAt = new Map();
+
+function getOwnedOrder(req) {
+  return db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(req.params.id, req.user.userId);
+}
+
+function orderWithItems(orderId) {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
+  return { ...order, items, payment_provider: ecpay.isEnabled() ? 'ecpay' : 'mock' };
+}
+
+/**
+ * @openapi
+ * /api/orders/{id}/ecpay/checkout:
+ *   post:
+ *     summary: 產生綠界 AIO 付款表單參數（信用卡）
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: 成功，前端以 POST 表單送往 data.action
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     action:
+ *                       type: string
+ *                     params:
+ *                       type: object
+ *                 error:
+ *                   type: string
+ *                   nullable: true
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: 未啟用綠界金流或訂單狀態不是 pending
+ *       404:
+ *         description: 訂單不存在
+ */
+router.post('/:id/ecpay/checkout', (req, res) => {
+  if (!ecpay.isEnabled()) {
+    return res.status(400).json({ data: null, error: 'VALIDATION_ERROR', message: '尚未啟用綠界金流' });
+  }
+
+  const order = getOwnedOrder(req);
+  if (!order) {
+    return res.status(404).json({ data: null, error: 'NOT_FOUND', message: '訂單不存在' });
+  }
+  if (order.status !== 'pending') {
+    return res.status(400).json({
+      data: null,
+      error: 'INVALID_STATUS',
+      message: '訂單狀態不是 pending，無法付款'
+    });
+  }
+
+  const items = db.prepare('SELECT product_name, quantity FROM order_items WHERE order_id = ?').all(order.id);
+  const merchantTradeNo = ecpay.generateMerchantTradeNo();
+  db.prepare('UPDATE orders SET merchant_trade_no = ? WHERE id = ?').run(merchantTradeNo, order.id);
+
+  res.json({
+    data: ecpay.buildCheckoutParams(order, items, merchantTradeNo),
+    error: null,
+    message: '請前往綠界付款'
+  });
+});
+
+/**
+ * @openapi
+ * /api/orders/{id}/ecpay/query:
+ *   post:
+ *     summary: 主動查詢綠界交易並更新訂單付款狀態（QueryTradeInfo）
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: 查詢成功（訂單仍可能為 pending，代表尚未付款）
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                     trade_status:
+ *                       type: string
+ *                       nullable: true
+ *                 error:
+ *                   type: string
+ *                   nullable: true
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: 未啟用綠界金流、尚未發起付款或金額不符
+ *       404:
+ *         description: 訂單不存在
+ *       429:
+ *         description: 查詢過於頻繁
+ *       502:
+ *         description: 綠界查詢失敗
+ */
+router.post('/:id/ecpay/query', async (req, res) => {
+  if (!ecpay.isEnabled()) {
+    return res.status(400).json({ data: null, error: 'VALIDATION_ERROR', message: '尚未啟用綠界金流' });
+  }
+
+  const order = getOwnedOrder(req);
+  if (!order) {
+    return res.status(404).json({ data: null, error: 'NOT_FOUND', message: '訂單不存在' });
+  }
+
+  // 已是終態：直接回傳，不再呼叫綠界
+  if (order.status !== 'pending') {
+    return res.json({
+      data: { ...orderWithItems(order.id), trade_status: null },
+      error: null,
+      message: '訂單已完成付款處理'
+    });
+  }
+
+  if (!order.merchant_trade_no) {
+    return res.status(400).json({ data: null, error: 'VALIDATION_ERROR', message: '尚未發起付款' });
+  }
+
+  // 綠界高頻查詢會回 403（需等 30 分鐘），先在本地節流
+  const last = lastQueryAt.get(order.id) || 0;
+  if (Date.now() - last < QUERY_COOLDOWN_MS) {
+    return res.status(429).json({ data: null, error: 'RATE_LIMITED', message: '查詢過於頻繁，請稍後再試' });
+  }
+  lastQueryAt.set(order.id, Date.now());
+
+  let trade;
+  try {
+    trade = await ecpay.queryTradeInfo(order.merchant_trade_no);
+  } catch (err) {
+    console.error('ECPay query error:', err.message);
+    return res.status(502).json({
+      data: null,
+      error: 'PAYMENT_QUERY_FAILED',
+      message: '查詢綠界付款結果失敗，請稍後再試'
+    });
+  }
+
+  const tradeStatus = trade.TradeStatus;
+  let message = '尚未收到付款，請完成付款後再查詢';
+
+  if (tradeStatus === '1') {
+    if (Number(trade.TradeAmt) !== order.total_amount) {
+      return res.status(400).json({
+        data: null,
+        error: 'PAYMENT_AMOUNT_MISMATCH',
+        message: '綠界交易金額與訂單金額不符'
+      });
+    }
+    // WHERE status = 'pending' 使重複查詢冪等
+    db.prepare(
+      `UPDATE orders SET status = 'paid', ecpay_trade_no = ?, payment_type = ?, paid_at = ?
+       WHERE id = ? AND status = 'pending'`
+    ).run(trade.TradeNo || null, trade.PaymentType || null, trade.PaymentDate || null, order.id);
+    message = '付款成功';
+  } else if (tradeStatus === '10200095') {
+    db.prepare("UPDATE orders SET status = 'failed' WHERE id = ? AND status = 'pending'").run(order.id);
+    message = '付款失敗';
+  }
+
+  res.json({
+    data: { ...orderWithItems(order.id), trade_status: tradeStatus },
+    error: null,
+    message
   });
 });
 

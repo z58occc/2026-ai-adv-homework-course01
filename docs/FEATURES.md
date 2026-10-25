@@ -18,13 +18,14 @@
 | 購物車 | 登入後合併訪客購物車 | ⬜ |
 | 訂單 | 由購物車建立訂單（transaction 扣庫存） | ✅ |
 | 訂單 | 我的訂單列表 / 詳情 | ✅ |
-| 訂單 | 模擬付款（success / fail） | 🟡（未串接 ECPay；failed 不可重試、不回補庫存） |
+| 訂單 | 綠界 ECPay AIO 信用卡付款（主動 QueryTradeInfo 驗證） | 🟡（無 Server Notify；僅信用卡；failed 不回補庫存） |
+| 訂單 | 模擬付款（success / fail） | 🟡（僅在未設定 `ECPAY_MERCHANT_ID` 時啟用） |
 | 訂單 | 取消訂單 / 運費計入金額 | ⬜ |
 | 後台 | 商品管理（列表 / 新增 / 編輯 / 刪除） | 🟡（刪除會被購物車 FK 卡住） |
 | 後台 | 訂單管理（列表 / 狀態篩選 / 詳情） | ✅（唯讀） |
 | 後台 | 訂單狀態手動修改、使用者管理 | ⬜ |
 | 文件 | OpenAPI 產生（`npm run openapi`） | ✅ |
-| 金流 | ECPay 串接 | ⬜（僅有 `.env` 設定佔位） |
+| 金流 | ECPay 串接 | 🟡（AIO 信用卡 + 主動查詢；ATM/超商離線付款未支援） |
 
 ---
 
@@ -125,11 +126,22 @@
 ### GET `/api/orders/:id`
 以 `id AND user_id` 查詢；不存在或屬於他人 → `404 NOT_FOUND「訂單不存在」`。回傳 `data: { ...order 全欄位, items: [order_items 全欄位] }`。
 
-### PATCH `/api/orders/:id/pay` — 模擬付款
+### PATCH `/api/orders/:id/pay` — 模擬付款（僅 mock 模式）
+- **`ECPAY_MERCHANT_ID`/`HASH_KEY`/`HASH_IV` 已設定時一律 `403 FORBIDDEN「已啟用綠界金流，無法使用模擬付款」`**；未設定才可用。`GET /api/orders/:id` 的 `payment_provider`（`ecpay`/`mock`）指示目前模式。
 - **Body**：`action` 必須為 `"success"`（→ `paid`）或 `"fail"`（→ `failed`），否則 `400 VALIDATION_ERROR「action 必須為 success 或 fail」`。
 - 訂單不存在/非己有 → 404；`status !== 'pending'` → `400 INVALID_STATUS「訂單狀態不是 pending，無法付款」`。
 - 成功回 `data: { ...order, items }`，message「付款成功」或「付款失敗」。
 - **限制**：這是無需任何憑證的狀態切換端點，任何登入者可把自己的 pending 訂單標為已付款。串接真實金流時必須移除或改為金流 callback 驗簽。`failed` 為終態，庫存不回補。
+
+### POST `/api/orders/:id/ecpay/checkout` — 綠界付款表單（需 JWT）
+- 僅限本人 `pending` 訂單；`ECPAY_MERCHANT_ID` 未設定 → `400 VALIDATION_ERROR「尚未啟用綠界金流」`；非 pending → `400 INVALID_STATUS`。
+- 每次呼叫重新產生 `merchant_trade_no`（`FL` + 時間戳 + 隨機，英數 ≤20 字元），故「放棄付款」可重試。
+- 回 `data: { action, params }`：前端以動態 `<form method=POST>` 送往 `action`（綠界 `AioCheckOut/V5`）。`ChoosePayment=Credit`、`TotalAmount = total_amount`（不含運費）、`ClientBackURL = BASE_URL/orders/:id?payment=return`。`ReturnURL` 為佔位（本機收不到）。
+
+### POST `/api/orders/:id/ecpay/query` — 主動查詢付款結果（需 JWT）
+- 呼叫綠界 `QueryTradeInfo/V5`，驗證回應 `CheckMacValue`（timing-safe）後依 `TradeStatus` 更新：`1`→`paid`（寫入 `ecpay_trade_no`、`payment_type`、`paid_at`）、`10200095`→`failed`、其他（`0`、`10200047`）→ 維持 `pending`。更新帶 `WHERE status='pending'`，重複查詢冪等；終態訂單直接回傳、不再呼叫綠界。
+- `TradeAmt ≠ total_amount` → `400 PAYMENT_AMOUNT_MISMATCH`（不更新）；綠界 403／逾時／CMV 不符 → `502 PAYMENT_QUERY_FAILED`；同一訂單 5 秒內重複查詢 → `429 RATE_LIMITED`（綠界高頻查詢會被 403 封 30 分鐘）。
+- 尚未呼叫過 checkout → `400「尚未發起付款」`。
 
 ### 訂單狀態機
 ```
@@ -206,7 +218,7 @@ pending ──(action=success)──► paid     （終態）
 | 2 | 結帳頁顯示運費，後端金額不含運費 | 金額不一致 | checkout.ejs vs orderRoutes.js |
 | 3 | 商品在購物車時刪除 → 500 | 後台刪除失敗 | adminProductRoutes.js / schema FK |
 | 4 | `apiFetch` 對登入失敗的 401 也強制導向 | 看不到伺服器錯誤訊息 | public/js/api.js |
-| 5 | `pay` 端點無金流驗證；failed 不可重試且不回補庫存 | 僅適用 Demo | orderRoutes.js |
+| 5 | mock 模式的 `pay` 端點無金流驗證；failed 不可重試且不回補庫存 | 僅適用 Demo（ECPay 模式已停用 `pay`） | orderRoutes.js |
 | 6 | PUT 商品 `name` 非字串 → 500 | 輸入驗證不完整 | adminProductRoutes.js |
 | 7 | `errorHandler` 一律回 `error: 'INTERNAL_ERROR'` | 4xx 的錯誤碼不準確 | errorHandler.js |
-| 8 | ECPay 環境變數未使用 | 金流未實作 | .env.example |
+| 8 | 無法接收綠界 Server Notify（本機） | 付款後未返回網站則需手動「查詢付款結果」；離線付款（ATM/超商）不支援 | ecpayService.js |

@@ -4,7 +4,16 @@
 
 ## [Unreleased]
 
-（目前無待發佈項目。已知待辦見 FEATURES.md §9。）
+### Added
+- 串接綠界 ECPay AIO 信用卡金流：`POST /api/orders/:id/ecpay/checkout`（產生簽章表單參數）、`POST /api/orders/:id/ecpay/query`（後端主動呼叫 `QueryTradeInfo/V5` 驗證後更新訂單）。因本機無法接收 Server Notify，不實作 callback。
+- `src/services/ecpayService.js`（CheckMacValue、建立付款參數、查詢）；`orders` 新增 `merchant_trade_no`、`ecpay_trade_no`、`payment_type`、`paid_at`（含舊資料庫自動補欄位）。
+- 訂單詳情新增 `payment_provider`；訂單頁新增「前往綠界付款」「查詢付款結果」，從綠界返回後自動查詢。
+- `tests/ecpay.test.js`（12 個測試，mock `fetch`）。
+
+### Changed
+- 設定 `ECPAY_*` 後 `PATCH /api/orders/:id/pay`（模擬付款）回 403，僅在未設定時可用。
+
+（其他已知待辦見 FEATURES.md §9。）
 
 ## [2026-10-25] — 文件建立
 

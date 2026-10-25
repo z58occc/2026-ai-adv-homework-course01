@@ -4,7 +4,7 @@
 
 - 框架：**Vitest 2**（`globals: true`，不需 import `describe/it/expect/beforeAll`）+ **supertest**（直接把 Express `app` 丟給 `request(app)`，不佔用 port）。
 - 指令：`npm test`（= `vitest run`）。單檔：`npx vitest run tests/cart.test.js`。
-- 最近一次執行結果：6 個檔案、32 個測試全數通過（約 3 秒）。
+- 最近一次執行結果：7 個檔案、44 個測試全數通過（約 4 秒）。
 - 前置條件：根目錄有 `.env` 且含 `JWT_SECRET`（`app.js` 載入 dotenv；測試不會經過 `server.js` 的 JWT_SECRET 檢查，缺少時註冊/登入會因簽章失敗而出錯）。
 
 ### vitest.config.js 重點
@@ -12,7 +12,7 @@
 |------|----|------|
 | `globals` | `true` | 測試檔直接使用 `describe/it/expect` |
 | `fileParallelism` | `false` | 所有測試檔共用同一個 SQLite 檔，必須串行 |
-| `sequence.files` | auth → products → cart → orders → adminProducts → adminOrders | 固定檔案執行順序 |
+| `sequence.files` | auth → products → cart → orders → ecpay → adminProducts → adminOrders | 固定檔案執行順序 |
 | `hookTimeout` | `10000` | `beforeAll` 內有註冊/下單等較慢操作（bcrypt） |
 
 > Vitest 會自動把 `NODE_ENV` 設為 `test`，所以 seed admin 用 bcrypt 1 round；測試內註冊的使用者仍走 `authRoutes` 的 10 rounds。
@@ -26,15 +26,16 @@
 | `tests/products.test.js` | 4 | 列表、分頁（`page=1&limit=2`）、詳情、不存在 404 | 需有 seed 商品；`productId` 由第 1 個測試取得，後續測試依賴 |
 | `tests/cart.test.js` | 6 | 訪客：新增/取得/改數量/刪除並確認清空；會員：新增；加入不存在商品 404 | `beforeAll` 取第一個商品；`cartItemId` 在測試間傳遞 |
 | `tests/orders.test.js` | 6 | 建單（201、status pending）、空購物車 400、無 token 401、訂單列表、訂單詳情、不存在 404 | `beforeAll` 註冊使用者並加入購物車；第 2 個測試依賴第 1 個已清空購物車 |
+| `tests/ecpay.test.js` | 12 | CMV 官方測試向量與竄改偵測；checkout 參數與簽章、他人訂單 404；query：未發起付款 400、TradeStatus 0 維持 pending + 429 節流、1→paid 且冪等、10200095→failed、金額不符、CMV 錯誤/HTTP 403 → 502；ECPay 啟用時 `/pay` 403 | 以 `vi.spyOn(global,'fetch')` mock 綠界、`Date.now` 推進以避開節流；**不打真實網路**；依賴 `.env` 的 `ECPAY_*` |
 | `tests/adminProducts.test.js` | 6 | 列表、新增、更新、刪除（並確認前台 404）、一般使用者 403、無 token 401 | `beforeAll` 取 admin token（seed admin） |
 | `tests/adminOrders.test.js` | 4 | 列表、`status=pending` 篩選、詳情（含 `user`）、一般使用者 403 | `beforeAll`：註冊 → 加入購物車 → 建單 |
 
-**未覆蓋**：`PATCH /api/orders/:id/pay`、`GET /api/auth/profile` 的已刪除使用者情境、商品庫存不足、購物車累加、購物車 token 無效、`PUT` 驗證錯誤、`DELETE` 受 pending 訂單阻擋（409）、購物車 FK 導致的 500、分頁邊界、頁面路由（EJS）與前端 JS。新增相關功能時優先補這些。
+**未覆蓋**：mock 模式的 `PATCH /api/orders/:id/pay` 成功路徑、`GET /api/auth/profile` 的已刪除使用者情境、商品庫存不足、購物車累加、購物車 token 無效、`PUT` 驗證錯誤、`DELETE` 受 pending 訂單阻擋（409）、購物車 FK 導致的 500、分頁邊界、頁面路由（EJS）與前端 JS。新增相關功能時優先補這些。
 
 ## 3. 執行順序與依賴關係
 
 ```
-auth ─► products ─► cart ─► orders ─► adminProducts ─► adminOrders
+auth ─► products ─► cart ─► orders ─► ecpay ─► adminProducts ─► adminOrders
 ```
 - 順序由 `vitest.config.js` 固定；**每個檔案獨立註冊自己需要的使用者**，檔案之間沒有資料共享，順序主要是為了可預期性與減少鎖競爭。
 - **檔案內的 `it` 依序執行且互相依賴**（例如 `cartItemId`、`orderId`、`userToken` 以閉包變數傳遞）。單獨用 `-t` 只跑其中一個 `it` 會因前置變數為 `undefined` 而失敗。

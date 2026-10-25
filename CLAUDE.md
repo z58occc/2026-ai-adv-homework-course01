@@ -12,14 +12,14 @@ npm run dev:server     # 只啟動 server（需先有 public/css/output.css）
 npm run dev:css        # Tailwind watch
 npm run css:build      # 建置 public/css/output.css
 npm run openapi        # 產生 openapi.json
-npm test               # vitest run（6 檔 32 測試）
+npm test               # vitest run（7 檔 44 測試）
 ```
 
 ## 關鍵規則
 - 後端一律 CommonJS；DB 為 better-sqlite3 **同步 API**，SQL 用 `?` 參數化，多表寫入包 `db.transaction`。
 - 所有 `/api/*` 回應必須是 `{ data, error, message }`（成功 `error: null`，失敗 `data: null` + 錯誤碼字串 + 繁體中文 message）；請求 body 用 camelCase、回應欄位用 snake_case。
 - 購物車使用雙模式認證（JWT 或 `X-Session-Id`），**登入不會合併訪客購物車**；`req.user.role` 取自 JWT，不重查 DB；後台頁面權限只在前端檢查，真正保護在 `/api/admin/*`。
-- 付款是模擬的（`PATCH /api/orders/:id/pay`），`ECPAY_*`/`BASE_URL` 尚未使用；庫存於「建單」時扣除；訂單 `total_amount` 不含運費。
+- 付款為綠界 AIO 信用卡 + 後端主動 `QueryTradeInfo` 驗證（本機收不到 Server Notify，`src/services/ecpayService.js`）；未設定 `ECPAY_*` 時退回模擬付款（`PATCH /api/orders/:id/pay`）；庫存於「建單」時扣除；訂單 `total_amount` 不含運費。
 - 測試與開發共用同一個 `database.sqlite`，測試檔須依 `vitest.config.js` 的 `sequence.files` 順序且不可平行；新增測試檔要加入該清單。
 - 功能開發使用 docs/plans/ 記錄計畫；完成後移至 docs/plans/archive/（命名 `YYYY-MM-DD-<feature-name>.md`，結構 User Story → Spec → Tasks），並更新 FEATURES.md 與 CHANGELOG.md。
 

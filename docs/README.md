@@ -35,7 +35,7 @@ npm start
 - 管理員帳號（預設 seed）：`admin@hexschool.com` / `12345678`，登入後 header 會出現「後台管理」。
 - 一般會員：在 `/login` 的「註冊」分頁自行註冊（密碼至少 6 字元）。
 - 訪客可直接加入購物車；**結帳需登入**，且登入後看到的是會員購物車（不會合併訪客購物車）。
-- 付款為**模擬**：訂單詳情頁按「模擬付款成功/失敗」。
+- 付款走綠界測試環境：訂單詳情頁按「前往綠界付款」（測試卡 4311-9522-2222-2222、3D 碼 1234），付款後返回商店會自動查詢結果；`.env` 未設定 `ECPAY_*` 時退回模擬付款按鈕。
 
 開發模式（兩個終端機）：
 ```bash
@@ -58,7 +58,7 @@ npm test
 | `npm run dev:css` | Tailwind watch 模式 |
 | `npm run css:build` | 建置並壓縮 `public/css/output.css` |
 | `npm run openapi` | 掃描 `src/routes/*.js` 產生 `openapi.json` |
-| `npm test` | 執行 Vitest 整合測試（32 個） |
+| `npm test` | 執行 Vitest 整合測試（44 個） |
 
 ## 環境變數（摘要）
 
@@ -68,7 +68,8 @@ npm test
 | `PORT` | 否 | 3001 |
 | `FRONTEND_URL` | 否 | `http://localhost:3001`（CORS origin） |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 否 | `admin@hexschool.com` / `12345678` |
-| `ECPAY_*`、`BASE_URL` | 目前未使用 | — |
+| `ECPAY_MERCHANT_ID/HASH_KEY/HASH_IV/ECPAY_ENV` | 否（缺少則為模擬付款） | staging 測試帳號 |
+| `BASE_URL` | 否 | `http://localhost:3001` |
 
 完整說明見 [DEVELOPMENT.md](./DEVELOPMENT.md#3-環境變數)。
 

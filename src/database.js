@@ -10,6 +10,18 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// 舊資料庫補上 ECPay 欄位（CREATE TABLE IF NOT EXISTS 不會修改既有資料表）
+function migrateOrdersForEcpay() {
+  const existing = db.prepare('PRAGMA table_info(orders)').all().map(c => c.name);
+  const columns = ['merchant_trade_no', 'ecpay_trade_no', 'payment_type', 'paid_at'];
+  for (const col of columns) {
+    if (!existing.includes(col)) {
+      db.exec(`ALTER TABLE orders ADD COLUMN ${col} TEXT`);
+    }
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_merchant_trade_no ON orders(merchant_trade_no)');
+}
+
 function initializeDatabase() {
   // Create tables
   db.exec(`
@@ -52,7 +64,10 @@ function initializeDatabase() {
       recipient_address TEXT NOT NULL,
       total_amount INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'failed')),
-
+      merchant_trade_no TEXT,
+      ecpay_trade_no TEXT,
+      payment_type TEXT,
+      paid_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
@@ -67,6 +82,8 @@ function initializeDatabase() {
       FOREIGN KEY (order_id) REFERENCES orders(id)
     );
   `);
+
+  migrateOrdersForEcpay();
 
   // Seed data
   seedAdminUser();

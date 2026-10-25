@@ -47,8 +47,9 @@
 | `ADMIN_EMAIL` | seed 管理員 email | 選填 | `admin@hexschool.com` | database.js |
 | `ADMIN_PASSWORD` | seed 管理員密碼 | 選填 | `12345678` | database.js |
 | `NODE_ENV` | `test` 時 seed admin 的 bcrypt rounds 降為 1（Vitest 會自動設為 `test`） | 選填 | 未設 | database.js |
-| `BASE_URL` | 預留（金流回導網址） | 目前**未使用** | — | — |
-| `ECPAY_MERCHANT_ID` / `ECPAY_HASH_KEY` / `ECPAY_HASH_IV` / `ECPAY_ENV` | 預留（綠界金流，範例為 staging 測試帳號） | 目前**未使用** | — | — |
+| `BASE_URL` | 本站對外網址，組成綠界 `ClientBackURL`/`ReturnURL` | 選填 | `http://localhost:3001` | ecpayService.js |
+| `ECPAY_MERCHANT_ID` / `ECPAY_HASH_KEY` / `ECPAY_HASH_IV` | 綠界 AIO 金流憑證（範例為公開 staging 測試帳號）；**三者缺一則退回模擬付款** | 選填 | 無 | ecpayService.js、orderRoutes.js |
+| `ECPAY_ENV` | `staging`（測試）或 `production`（正式） | 選填 | `staging` | ecpayService.js |
 
 注意：
 - seed admin 只在「該 email 尚不存在」時建立；之後修改 `ADMIN_PASSWORD` **不會更新**既有帳號，需刪除 `database.sqlite*` 或直接改 DB。

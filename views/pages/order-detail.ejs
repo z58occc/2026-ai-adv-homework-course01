@@ -71,7 +71,27 @@
     </div>
 
     <!-- Payment Buttons -->
-    <div v-if="order.status === 'pending'" class="flex gap-4">
+    <div v-if="order.status === 'pending' && order.payment_provider === 'ecpay'">
+      <div class="flex gap-4">
+        <button
+          @click="goEcpay"
+          :disabled="paying"
+          class="bg-rose-primary text-white px-8 py-3 rounded-full text-sm font-medium hover:opacity-90 transition-colors disabled:opacity-50"
+        >
+          {{ paying ? '前往中...' : '前往綠界付款' }}
+        </button>
+        <button
+          @click="queryEcpay"
+          :disabled="querying"
+          class="border border-sage text-sage px-8 py-3 rounded-full text-sm font-medium hover:bg-sage/10 transition-colors disabled:opacity-50"
+        >
+          {{ querying ? '查詢中...' : '查詢付款結果' }}
+        </button>
+      </div>
+      <p v-if="queryHint" class="text-sm text-text-secondary mt-3">{{ queryHint }}</p>
+      <p class="text-xs text-text-muted mt-3">測試卡號 4311-9522-2222-2222，3D 驗證碼 1234。付款後請按綠界頁面的「返回商店」。</p>
+    </div>
+    <div v-else-if="order.status === 'pending'" class="flex gap-4">
       <button
         @click="handlePaySuccess"
         :disabled="paying"

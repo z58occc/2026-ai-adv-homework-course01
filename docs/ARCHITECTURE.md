@@ -38,6 +38,8 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 │   │   ├── adminMiddleware.js    # 要求 req.user.role === 'admin'，必須接在 authMiddleware 之後
 │   │   ├── sessionMiddleware.js  # 讀取 X-Session-Id header 存入 req.sessionId（全域掛載，不驗證）
 │   │   └── errorHandler.js       # 全域錯誤處理，隱藏內部錯誤細節
+│   ├── services/
+│   │   └── ecpayService.js       # 綠界 AIO：CheckMacValue、建立付款表單參數、QueryTradeInfo 主動查詢
 │   └── routes/
 │       ├── authRoutes.js         # /api/auth：register / login / profile
 │       ├── productRoutes.js      # /api/products：公開商品列表與詳情
@@ -125,6 +127,8 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 | PATCH | /api/cart/:itemId | JWT 或 Session | 200 |
 | DELETE | /api/cart/:itemId | JWT 或 Session | 200 |
 | POST | /api/orders | JWT | 201 |
+| POST | /api/orders/:id/ecpay/checkout | JWT | 200 |
+| POST | /api/orders/:id/ecpay/query | JWT | 200 |
 | GET | /api/orders | JWT | 200 |
 | GET | /api/orders/:id | JWT | 200 |
 | PATCH | /api/orders/:id/pay | JWT | 200 |
@@ -238,7 +242,13 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 | recipient_address | TEXT | NOT NULL |
 | total_amount | INTEGER | NOT NULL（**商品小計，不含運費**） |
 | status | TEXT | NOT NULL DEFAULT 'pending'，CHECK IN ('pending','paid','failed') |
+| merchant_trade_no | TEXT | 綠界特店交易編號（UNIQUE index；每次發起付款重新產生） |
+| ecpay_trade_no | TEXT | 綠界交易編號（查詢確認已付款後寫入） |
+| payment_type | TEXT | 綠界付款方式（如 `Credit_CreditCard`） |
+| paid_at | TEXT | 綠界回報付款時間 |
 | created_at | TEXT | NOT NULL DEFAULT datetime('now') |
+
+> 舊資料庫由 `migrateOrdersForEcpay()` 以 `PRAGMA table_info` + `ALTER TABLE` 補欄位。
 
 ### order_items
 | 欄位 | 型別 | 約束 |
@@ -264,26 +274,29 @@ users 1──n cart_items n──1 products       (cart_items.session_id 訪客)
 
 ## 8. 訂單與付款流程（金流）
 
-### 現況：**模擬付款，未串接真實金流**
-`.env.example` 含 `ECPAY_*` 與 `BASE_URL`，但**目前程式碼完全沒有讀取這些變數**（`grep` 僅 `FRONTEND_URL`、`PORT`、`JWT_SECRET`、`ADMIN_*`、`NODE_ENV` 被使用）。
+### 綠界 ECPay AIO（信用卡）+ 主動查詢驗證
+本專案僅在本機執行，綠界無法呼叫 ReturnURL（Server Notify），因此**付款結果由後端主動呼叫 `QueryTradeInfo/V5` 驗證**，不實作 callback 接收端。`ECPAY_MERCHANT_ID/HASH_KEY/HASH_IV` 未設定時退回「模擬付款」。
 
-流程：
 ```
-購物車(user_id) ──POST /api/orders──► [transaction]
-                                       1. INSERT orders (status=pending)
-                                       2. 每個購物車項目：INSERT order_items(快照) + UPDATE products SET stock = stock - qty
-                                       3. DELETE cart_items WHERE user_id
-                          ◄── 201 { id, order_no, total_amount, status:'pending', items, created_at }
-訂單詳情頁 /orders/:id ──按「模擬付款成功/失敗」──► PATCH /api/orders/:id/pay { action: 'success' | 'fail' }
-                                       pending → paid（success）或 failed（fail）；非 pending 一律 400 INVALID_STATUS
+購物車 ──POST /api/orders──► 建單（status=pending，扣庫存）
+訂單頁「前往綠界付款」──POST /api/orders/:id/ecpay/checkout──► { action, params(含 CheckMacValue) }
+前端動態 form POST ──► 綠界 AioCheckOut/V5 ──消費者付款──► 按「返回商店」(ClientBackURL)
+/orders/:id?payment=return ──自動 POST /api/orders/:id/ecpay/query──► QueryTradeInfo/V5
+     驗 CheckMacValue + TradeAmt == total_amount ──► TradeStatus 1→paid / 10200095→failed / 其他→維持 pending
 ```
+- 環境：`ECPAY_ENV=staging` → `payment-stage.ecpay.com.tw`，`production` → `payment.ecpay.com.tw`；測試卡 `4311-9522-2222-2222`、3D 驗證碼 `1234`。
+- 只支援 `ChoosePayment=Credit`。ATM／超商代碼／條碼屬離線付款，主動查詢不適用（官方建議等 Server Notify）。
+- 查詢節流：同一訂單 5 秒冷卻；綠界高頻查詢會回 403 並封鎖 30 分鐘。
+- `ReturnURL` 為佔位網址（AIO 必填），不會被實作。使用者付款後若未返回網站，訂單維持 pending，可按「查詢付款結果」。
+
+### 共通規則
 - **庫存在「建單」時扣除**，不是付款時。`failed` 訂單**不會回補庫存**，也沒有取消訂單的 API。
-- `failed` 是終態：再次 `pay` 會因 status 非 pending 回 400，前端雖顯示「付款失敗，請重試」但實際無法重試。
-- `order-detail` 頁預留 `?payment=success|failed|cancel` 橫幅，為未來金流回導（ECPay）設計；目前只有模擬付款會直接更新頁面狀態。
+- `failed` 是終態；`pending`（含綠界回報未付款）可重新按「前往綠界付款」，會產生新的 `merchant_trade_no`。
+- mock 模式：`PATCH /api/orders/:id/pay { action: 'success' | 'fail' }`，ECPay 啟用時回 403。
 
 ### 金額一致性陷阱
 - 前端 `checkout.ejs` 顯示「運費：小計 ≥ 500 免運，否則 NT$ 150」，並顯示含運費總額；
-- 後端 `total_amount` **只有商品小計**，不含運費。實際入庫金額與結帳頁顯示總額在小計 < 500 時相差 150。串接金流或對帳前必須先決定以誰為準。
+- 後端 `total_amount` **只有商品小計**，不含運費，且送綠界的 `TotalAmount` 即此值。結帳頁顯示總額在小計 < 500 時比實際刷卡金額多 150。上線前必須先決定以誰為準。
 
 ## 9. 前端架構與陷阱
 
@@ -302,6 +315,6 @@ users 1──n cart_items n──1 products       (cart_items.session_id 訪客)
 2. 購物車有兩種擁有者（user_id / session_id）；**登入不會合併訪客購物車**。
 3. `req.user.role` 來自 JWT 而非 DB。
 4. 庫存只在建單時檢查與扣除；加入購物車只做「購物車數量 ≤ 當前庫存」的軟檢查，不保留庫存。
-5. 付款為模擬；`ECPAY_*`、`BASE_URL` 尚未使用。
+5. 付款為綠界 AIO（信用卡）+ 主動 QueryTradeInfo 驗證；未設定 `ECPAY_*` 時退回模擬付款。
 6. 資料庫在 `require('./src/database')` 時立即初始化（副作用），測試與 app 共用同一個 `database.sqlite`。
 7. 訂單 `total_amount` 不含運費。
