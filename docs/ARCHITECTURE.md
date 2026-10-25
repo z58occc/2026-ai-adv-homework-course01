@@ -44,7 +44,7 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 │       ├── authRoutes.js         # /api/auth：register / login / profile
 │       ├── productRoutes.js      # /api/products：公開商品列表與詳情
 │       ├── cartRoutes.js         # /api/cart：購物車（內含 dualAuth 雙模式認證）
-│       ├── orderRoutes.js        # /api/orders：建立訂單、列表、詳情、模擬付款
+│       ├── orderRoutes.js        # /api/orders：建立訂單、列表、詳情、綠界付款（checkout/query）、模擬付款（僅 mock 模式）
 │       ├── adminProductRoutes.js # /api/admin/products：商品 CRUD（管理員）
 │       ├── adminOrderRoutes.js   # /api/admin/orders：訂單列表與詳情（管理員，唯讀）
 │       └── pageRoutes.js         # EJS 頁面路由（前台 7 頁 + 後台 2 頁）
@@ -95,7 +95,7 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 | `/api/auth` | authRoutes.js | `register`/`login` 無；`profile` 需 JWT | 註冊、登入、取得個人資料 |
 | `/api/products` | productRoutes.js | 無（公開） | 商品列表（分頁）、商品詳情 |
 | `/api/cart` | cartRoutes.js | **雙模式**：JWT 或 `X-Session-Id` | 取得/新增/修改數量/刪除購物車項目 |
-| `/api/orders` | orderRoutes.js | JWT（`router.use(authMiddleware)`） | 由購物車建單、我的訂單列表/詳情、模擬付款 |
+| `/api/orders` | orderRoutes.js | JWT（`router.use(authMiddleware)`） | 由購物車建單、我的訂單列表/詳情、綠界付款表單與主動查詢、模擬付款（ECPay 啟用時 403） |
 | `/api/admin/products` | adminProductRoutes.js | JWT + admin | 商品列表、新增、更新（部分欄位）、刪除 |
 | `/api/admin/orders` | adminOrderRoutes.js | JWT + admin | 訂單列表（分頁 + 狀態篩選）、訂單詳情（含買家） |
 | `/` | pageRoutes.js | 無（頁面外殼公開） | EJS 頁面；後台頁面的權限僅在瀏覽器端檢查 |
@@ -109,7 +109,7 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 | `/checkout` | pages/checkout | checkout | 未登入導向 `/login?redirect=...` |
 | `/login` | pages/login | login | 登入/註冊分頁，支援 `?redirect=` |
 | `/orders` | pages/orders | orders | |
-| `/orders/:id` | pages/order-detail | order-detail | `?payment=success\|failed\|cancel` 會顯示付款結果橫幅（預留給金流回導） |
+| `/orders/:id` | pages/order-detail | order-detail | `?payment=return`（綠界 ClientBackURL）載入後自動查詢付款結果；`?payment=success\|failed\|cancel` 顯示付款結果橫幅 |
 | `/admin/products` | pages/admin/products | admin-products | 使用 admin layout |
 | `/admin/orders` | pages/admin/orders | admin-orders | 使用 admin layout |
 | 其他 | pages/404 | — | 非 `/api` 路徑渲染 404 頁（HTTP 404） |
@@ -154,7 +154,7 @@ Browser ──GET /cart──────────► pageRoutes ──EJS(la
 
 - `error` 是**機器可讀的錯誤碼**（字串），成功時為 `null`；`message` 是繁體中文人類可讀訊息。前端以 `err.data.message` 顯示 toast。
 - 分頁清單的 `data` 為 `{ <複數名詞>: [...], pagination: { total, page, limit, totalPages } }`。
-- 錯誤碼清單：`VALIDATION_ERROR`、`UNAUTHORIZED`、`FORBIDDEN`、`NOT_FOUND`、`CONFLICT`、`STOCK_INSUFFICIENT`、`CART_EMPTY`、`INVALID_STATUS`、`INTERNAL_ERROR`。
+- 錯誤碼清單：`VALIDATION_ERROR`、`UNAUTHORIZED`、`FORBIDDEN`、`NOT_FOUND`、`CONFLICT`、`STOCK_INSUFFICIENT`、`CART_EMPTY`、`INVALID_STATUS`、`PAYMENT_AMOUNT_MISMATCH`、`PAYMENT_QUERY_FAILED`、`RATE_LIMITED`、`INTERNAL_ERROR`。
 - **陷阱**：`errorHandler` 不論狀態碼一律回 `error: 'INTERNAL_ERROR'`（即使 `err.status` 是 400/404）。只有 `statusCode === 500` 時 message 固定為「伺服器內部錯誤」；其他狀態碼若 `err.isOperational` 為真才回 `err.message`，否則回 `SAFE_MESSAGES` 對照文字。目前沒有任何程式碼設定 `isOperational`，路由皆自行 `res.status().json()`。
 - 未匹配的 `/api/*` 路徑回 `404 { data:null, error:'NOT_FOUND', message:'找不到該路徑' }`。
 

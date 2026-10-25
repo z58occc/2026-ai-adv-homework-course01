@@ -17,6 +17,7 @@
 | 對象 | 規則 | 範例 |
 |------|------|------|
 | 路由檔 | `<領域>Routes.js`（camelCase） | `authRoutes.js`、`adminProductRoutes.js` |
+| 服務模組 | `src/services/<名稱>Service.js`（第三方 API 封裝，不依賴 req/res，便於 mock 測試） | `ecpayService.js` |
 | 中介層檔 | `<名稱>Middleware.js`；錯誤處理為 `errorHandler.js` | `authMiddleware.js` |
 | 測試檔 | `<領域>.test.js`（camelCase），共用輔助為 `setup.js` | `adminOrders.test.js` |
 | 前端頁面腳本 | `kebab-case.js`，檔名 = `pageRoutes` 傳入的 `pageScript` | `order-detail.js` ↔ `pageScript: 'order-detail'` |
@@ -185,6 +186,13 @@ router.get('/', (req, res) => { /* ... */ });
 
 - 進行中的計畫放在 `docs/plans/`；歸檔後保留原檔名。
 - 完成定義：測試全過（`npm test`）、FEATURES.md 狀態更新、CHANGELOG.md 新增條目。
+
+## 8.1 串接綠界金流的注意事項
+1. 憑證只放後端 `.env`（`ECPAY_MERCHANT_ID/HASH_KEY/HASH_IV`），三者缺一即退回模擬付款；不可出現在前端。
+2. `MerchantTradeNo` 僅限英數、≤20 字元且不可重複，**不能用 `order_no`**（含 `-`）；每次發起付款由 `generateMerchantTradeNo()` 重新產生。
+3. 本機收不到 Server Notify：不要依賴 `ReturnURL`；付款結果一律走 `POST /api/orders/:id/ecpay/query`（`QueryTradeInfo/V5`）。綠界高頻查詢回 403 會被封 30 分鐘，勿移除 5 秒節流。
+4. CheckMacValue 與一般 AES API 的 URL encode 不同，請沿用 `ecpayUrlEncode`；比對使用 timing-safe。
+5. 測試 mock `global.fetch`，不要在測試中呼叫真實綠界；上線需換正式帳號、`ECPAY_ENV=production`，並改用可公開的 `BASE_URL`／ReturnURL。
 
 ## 9. 開發陷阱速查
 

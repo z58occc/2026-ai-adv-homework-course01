@@ -124,7 +124,7 @@
 只回傳自己的訂單，`created_at DESC`，**無分頁**。`data: { orders: [{ id, order_no, total_amount, status, created_at }] }`。
 
 ### GET `/api/orders/:id`
-以 `id AND user_id` 查詢；不存在或屬於他人 → `404 NOT_FOUND「訂單不存在」`。回傳 `data: { ...order 全欄位, items: [order_items 全欄位] }`。
+以 `id AND user_id` 查詢；不存在或屬於他人 → `404 NOT_FOUND「訂單不存在」`。回傳 `data: { ...order 全欄位（含 merchant_trade_no、ecpay_trade_no、payment_type、paid_at）, items: [order_items 全欄位], payment_provider: 'ecpay' | 'mock' }`。
 
 ### PATCH `/api/orders/:id/pay` — 模擬付款（僅 mock 模式）
 - **`ECPAY_MERCHANT_ID`/`HASH_KEY`/`HASH_IV` 已設定時一律 `403 FORBIDDEN「已啟用綠界金流，無法使用模擬付款」`**；未設定才可用。`GET /api/orders/:id` 的 `payment_provider`（`ecpay`/`mock`）指示目前模式。
@@ -145,14 +145,17 @@
 
 ### 訂單狀態機
 ```
-pending ──(action=success)──► paid     （終態）
-   └──────(action=fail)─────► failed   （終態）
+pending ──(ECPay: TradeStatus=1 / mock: action=success)──► paid    （終態）
+   └─────(ECPay: TradeStatus=10200095 / mock: action=fail)──► failed  （終態）
+ECPay 查到 TradeStatus=0 或 10200047（未付款／交易未建立）→ 維持 pending，可重新發起付款
 ```
 
 ### 前台頁面
 - `/checkout`：載入購物車，若空則導回 `/cart`；前端驗證三欄位與 Email 格式；成功後導向 `/orders/<id>`。頁面另顯示運費（小計 ≥ 500 免運，否則 NT$150），**此運費未送進後端**。
 - `/orders`：訂單卡片列表，狀態標籤 待付款/已付款/付款失敗。
-- `/orders/:id`：明細 + pending 時顯示「模擬付款成功／失敗」按鈕；`?payment=` 查詢參數預設顯示對應橫幅。
+- `/orders/:id`：明細；`pending` 且 `payment_provider='ecpay'` 時顯示「前往綠界付款」「查詢付款結果」（含測試卡提示），mock 模式則顯示「付款成功／失敗」模擬按鈕。
+  - `?payment=return`（綠界 `ClientBackURL` 導回）：載入後若訂單仍 pending 會自動呼叫 query；`?payment=success|failed|cancel` 仍可顯示對應橫幅。
+  - 查詢後仍為 pending 時，在按鈕下方顯示「尚未收到付款」提示。
 
 ---
 

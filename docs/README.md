@@ -1,6 +1,6 @@
 # 花漾生活 Flower Life — 花卉電商 Demo
 
-一個以 Node.js + Express 打造的全端花卉電商範例：前台商品瀏覽、訪客/會員雙模式購物車、下單與模擬付款，以及管理員後台（商品 CRUD、訂單檢視）。API 與頁面由同一個 Express 服務提供，資料存於單一 SQLite 檔。
+一個以 Node.js + Express 打造的全端花卉電商範例：前台商品瀏覽、訪客/會員雙模式購物車、下單與綠界 ECPay 信用卡付款（本機以主動查詢驗證付款結果；未設定金流憑證時退回模擬付款），以及管理員後台（商品 CRUD、訂單檢視）。API 與頁面由同一個 Express 服務提供，資料存於單一 SQLite 檔。
 
 ## 技術棧
 
@@ -14,6 +14,7 @@
 | 前端 | Vue 3（unpkg CDN，Composition API）、Tailwind CSS 4（`@tailwindcss/cli` 預先編譯） |
 | API 文件 | `swagger-jsdoc`（OpenAPI 3.0.3，產出 `openapi.json`） |
 | 其他 | `cors`、`dotenv`、`uuid` |
+| 金流 | 綠界 ECPay AIO（信用卡）；使用 Node 內建 `fetch`（Node 18+）呼叫 `QueryTradeInfo/V5` |
 | 測試 | Vitest 2 + supertest |
 
 ## 快速開始
@@ -79,6 +80,7 @@ npm test
 app.js / server.js     # Express 組裝與啟動
 src/database.js        # SQLite 初始化 + seed
 src/middleware/        # auth、admin、session、errorHandler
+src/services/          # ecpayService（綠界 AIO：CheckMacValue、付款參數、QueryTradeInfo）
 src/routes/            # 6 組 API 路由 + pageRoutes
 views/                 # EJS layouts / partials / pages
 public/js/             # 前端 auth/api/notification 與各頁 Vue 腳本
